@@ -13,6 +13,7 @@ git clone https://github.com/thejacksonharding/drone-markerless-motion-capture.g
 ### 2. Install dependencies
 
 ```bash
+pip install uv
 uv sync
 ```
 
