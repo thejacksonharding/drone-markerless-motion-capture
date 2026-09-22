@@ -7,7 +7,7 @@ Dual-drone markerless motion capture system for 3D biomechanical analysis.
 ### 1. Clone the repository
 
 ```bash
-git clone [<repository-url>](https://github.com/thejacksonharding/drone-markerless-motion-capture.git)
+git clone https://github.com/thejacksonharding/drone-markerless-motion-capture.git
 ```
 
 ### 2. Install dependencies
