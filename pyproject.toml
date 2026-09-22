@@ -1,0 +1,30 @@
+[project]
+name = "drone-mocap"
+version = "0.1.0"
+description = "Dual-drone markerless motion capture system for 3D biomechanical analysis"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "mediapipe==0.10.14",
+    "jax==0.4.20",
+    "jaxlib==0.4.20",
+    "opencv-python",
+    "numpy>=1.26.0",
+    "pandas",
+    "scipy",
+    "pyarrow",
+    "matplotlib",
+    "typer",
+    "rich",
+    "pyqt6",
+    "pyqtgraph",
+    "reportlab",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "pyinstaller>=6.19.0,<7.0.0",
+]
