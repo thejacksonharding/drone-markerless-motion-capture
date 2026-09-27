@@ -59,7 +59,7 @@ def _safe_angles(xy: np.ndarray, vis: np.ndarray, side: str) -> dict:
     Returns a plain Python dict — no MediaPipe objects.
     """
     try:
-        from drone_mocap.angles.saggital2D import joint_angles_sagittal
+        from drone_mocap-2.angles.saggital2D import joint_angles_sagittal
         result = joint_angles_sagittal(xy, vis, visible_side=side, min_vis=0.2)
         # Materialise to plain Python floats so nothing exotic crosses threads
         return {k: float(v) for k, v in result.items()}
@@ -133,7 +133,7 @@ class AnalysisWorker(QThread):
         try:
             import gc
             from app.utils.bundle import IS_BUNDLE, resource_path
-            from drone_mocap.pipeline.run import run_pipeline
+            from drone_mocap-2.pipeline.run import run_pipeline
 
             # ── MediaPipe bundle fix ─────────────────────────────────────────
             # MediaPipe's C++ calculator framework resolves .binarypb and
