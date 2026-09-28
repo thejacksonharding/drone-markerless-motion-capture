@@ -178,9 +178,9 @@ def evaluate(
 @app.command("doctor")
 def doctor():
     """Print import / environment debug info."""
-    import drone_mocap-2
+    import drone_mocap
     import drone_mocap.cli as cli_mod
-    print("[cyan]drone_mocap package:[/cyan]", drone_mocap-2.__file__)
+    print("[cyan]drone_mocap package:[/cyan]", drone_mocap.__file__)
     print("[cyan]cli module:[/cyan]", cli_mod.__file__)
     print("[cyan]app:[/cyan]", app)
 

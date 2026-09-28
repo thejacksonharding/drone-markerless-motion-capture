@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
 
         # Resolve real FPS + frame count once — avoids per-frame overhead
         try:
-            from drone_mocap-2.io.video import get_video_meta
+            from drone_mocap.io.video import get_video_meta
             meta = get_video_meta(Path(params["video_path"]))
             self._video_fps = meta.fps
             self._global_progress.setMaximum(max(meta.frame_count, 1))

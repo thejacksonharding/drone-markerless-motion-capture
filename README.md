@@ -139,7 +139,13 @@ python -m drone_mocap.run
 
 ### Standalone Executable App
 
-Build a self-contained executable app:
+Building a self-contained executable app or running pytests requires some extra dependencies:
+
+```bash
+uv sync --extra dev
+```
+
+Build the self-contained app with:
 
 ```bash
 pyinstaller drone_app.spec
@@ -173,7 +179,7 @@ pytest
 ```
 
 Tests mirror the source layout. Each subsystem has its own test folder under
-`tests/`, and `tests/fixtures/` holds a mini project used across the suite.
+`tests/`. Tests follow BDD format.
 
 ---
 
