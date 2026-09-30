@@ -1,32 +1,62 @@
-# Python
 __pycache__/
-*.py[cod]
-*.egg-info/
+
+# Virtual environments
 .venv/
+venv/
+env/
+
+# uv
+uv.lock
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Python packaging
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Build
-build/
-dist/
-*.spec.bak
-
-# Outputs
-outputs/*
-!outputs/.gitkeep
-
-# Data (never commit athlete recordings)
-data/
-*.mp4
-*.mov
-*.c3d
-
 # macOS
 .DS_Store
 
-# IDE
-.vscode/
-.idea/
+# Windows
+Thumbs.db
 
-uv.lock
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Local environment variables
+.env
+.env.*
+
+# PyInstaller
+*.spec
+
+# Generated reports
+reports/
+exports/
+
+# Raw data
+data/raw/
+
+# Processed datasets
+data/processed/
+
+# Temporary files
+tmp/
+temp/
+
+# OpenCV / video outputs
+*.mp4
+*.avi
+*.mov
+
+# Images generated during testing
+*.png
+*.jpg
+*.jpeg

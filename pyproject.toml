@@ -6,20 +6,25 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    "mediapipe",
+    "mediapipe==0.10.14",
+    "jax==0.4.20",
+    "jaxlib==0.4.20",
     "opencv-python",
-    "numpy",
+    "numpy>=1.26.0",
+    "pandas",
+    "scipy",
+    "pyarrow",
+    "matplotlib",
+    "typer",
+    "rich",
+    "pyqt6",
+    "pyqtgraph",
+    "reportlab",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
-    "pyinstaller",
+    "ruff",
+    "pyinstaller>=6.19.0,<7.0.0",
 ]
-
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]
