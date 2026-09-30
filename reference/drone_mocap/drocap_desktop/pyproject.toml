@@ -1,0 +1,28 @@
+[project]
+name = "drocap-desktop"
+version = "0.1.0"
+description = "DroCap Mission Control — PyQt6 desktop HUD"
+authors = [{ name = "DroCap Capstone Team" }]
+requires-python = "~=3.11.0"
+dependencies = [
+    "PyQt6",
+    "pyqtgraph",
+    "scipy",
+    "numpy>=1.26.0,<2.0.0",
+    "reportlab>=3.6",
+    "drone-mocap",
+]
+
+[project.scripts]
+drocap-desktop = "main:main"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.19.0,<7.0.0",
+]
+
+[tool.uv.sources]
+drone-mocap = { path = "../", editable = true }
+
+[tool.uv]
+package = false
