@@ -9,6 +9,8 @@ dependencies = [
     "mediapipe",
     "opencv-python",
     "numpy",
+    "pyqt6>=6.11.0",
+    "matplotlib>=3.11.2",
 ]
 
 [project.optional-dependencies]
