@@ -64,6 +64,9 @@ parser.add_argument('--gpu',
                     help='gpu',
                     default=0,
                     type=int)
+parser.add_argument('--device', default='auto',
+                    choices=['auto', 'cuda', 'mps', 'cpu'],
+                    help='inference device; auto selects CUDA, Apple MPS, or CPU')
 # parser.add_argument('--img-path',
 #                     help='image name',
 #                     default='',
@@ -83,6 +86,12 @@ parser.add_argument('--save-img', default=False, dest='save_img',
 
 
 opt = parser.parse_args()
+
+if opt.device == 'auto':
+    opt.device = ('cuda' if torch.cuda.is_available() else
+                  'mps' if torch.backends.mps.is_available() else 'cpu')
+device = torch.device(f'cuda:{opt.gpu}' if opt.device == 'cuda' else opt.device)
+print(f'Inference device: {device}')
 
 
 cfg_file = 'configs/256x192_adam_lr1e-3-hrw48_cam_2x_w_pw3d_3dhp.yaml'
@@ -144,8 +153,8 @@ if type(save_dict) == dict:
 else:
     hybrik_model.load_state_dict(save_dict)
 
-det_model.cuda(opt.gpu)
-hybrik_model.cuda(opt.gpu)
+det_model.to(device)
+hybrik_model.to(device)
 det_model.eval()
 hybrik_model.eval()
 
@@ -215,7 +224,7 @@ for img_path in tqdm(img_path_list):
     with torch.no_grad():
         # Run Detection
         input_image = cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)
-        det_input = det_transform(input_image).to(opt.gpu)
+        det_input = det_transform(input_image).to(device)
         det_output = det_model([det_input])[0]
 
         if prev_box is None:
@@ -231,11 +240,11 @@ for img_path in tqdm(img_path_list):
         # bbox: [x1, y1, x2, y2]
         pose_input, bbox, img_center = transformation.test_transform(
             input_image, tight_bbox)
-        pose_input = pose_input.to(opt.gpu)[None, :, :, :]
+        pose_input = pose_input.to(device)[None, :, :, :]
         pose_output = hybrik_model(
             pose_input, flip_test=True,
-            bboxes=torch.from_numpy(np.array(bbox)).to(pose_input.device).unsqueeze(0).float(),
-            img_center=torch.from_numpy(img_center).to(pose_input.device).unsqueeze(0).float()
+            bboxes=torch.from_numpy(np.array(bbox)).to(pose_input.device, dtype=torch.float32).unsqueeze(0),
+            img_center=torch.from_numpy(img_center).to(pose_input.device, dtype=torch.float32).unsqueeze(0)
         )
         uv_29 = pose_output.pred_uvd_jts.reshape(29, 3)[:, :2]
         transl = pose_output.transl.detach()

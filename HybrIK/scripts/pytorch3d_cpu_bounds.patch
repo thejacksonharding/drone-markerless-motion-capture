@@ -1,0 +1,58 @@
+diff --git a/pytorch3d/csrc/rasterize_meshes/rasterize_meshes_cpu.cpp b/pytorch3d/csrc/rasterize_meshes/rasterize_meshes_cpu.cpp
+index 210df55..22c216e 100644
+--- a/pytorch3d/csrc/rasterize_meshes/rasterize_meshes_cpu.cpp
++++ b/pytorch3d/csrc/rasterize_meshes/rasterize_meshes_cpu.cpp
+@@ -9,6 +9,7 @@
+ #include <torch/extension.h>
+ #include <algorithm>
+ #include <list>
++#include <limits>
+ #include <queue>
+ #include <thread>
+ #include <tuple>
+@@ -149,6 +150,25 @@ void RasterizeMeshesNaiveCpu_worker(
+     const int face_stop_idx =
+         (face_start_idx + num_faces_per_mesh[n].item().to<int32_t>());
+ 
++    // Conservatively reject empty background pixels before the face loop.
++    // These bounds are the union of the existing per-face bounds, with the
++    // exact same blur expansion; all pixels which can hit a face are retained.
++    float mesh_x_min = std::numeric_limits<float>::infinity();
++    float mesh_y_min = std::numeric_limits<float>::infinity();
++    float mesh_x_max = -std::numeric_limits<float>::infinity();
++    float mesh_y_max = -std::numeric_limits<float>::infinity();
++    const float bounds_blur = std::sqrt(blur_radius);
++    for (int f = face_start_idx; f < face_stop_idx; ++f) {
++      const auto face_bbox = face_bboxes_a[f];
++      if (face_bbox[4] < kEpsilon) {
++        continue;
++      }
++      mesh_x_min = std::min(mesh_x_min, face_bbox[0] - bounds_blur);
++      mesh_y_min = std::min(mesh_y_min, face_bbox[1] - bounds_blur);
++      mesh_x_max = std::max(mesh_x_max, face_bbox[2] + bounds_blur);
++      mesh_y_max = std::max(mesh_y_max, face_bbox[3] + bounds_blur);
++    }
++
+     // Iterate through the horizontal lines of the image from top to bottom.
+     for (int yi = start_yi; yi < end_yi; ++yi) {
+       // Reverse the order of yi so that +Y is pointing upwards in the image.
+@@ -156,6 +176,9 @@ void RasterizeMeshesNaiveCpu_worker(
+ 
+       // Y coordinate of the top of the pixel.
+       const float yf = PixToNonSquareNdc(yidx, H, W);
++      if (yf < mesh_y_min || yf > mesh_y_max) {
++        continue;
++      }
+       // Iterate through pixels on this horizontal line, left to right.
+       for (int xi = 0; xi < W; ++xi) {
+         // Reverse the order of xi so that +X is pointing to the left in the
+@@ -164,6 +187,9 @@ void RasterizeMeshesNaiveCpu_worker(
+ 
+         // X coordinate of the left of the pixel.
+         const float xf = PixToNonSquareNdc(xidx, W, H);
++        if (xf < mesh_x_min || xf > mesh_x_max) {
++          continue;
++        }
+ 
+         // Use a deque to hold values:
+         // (z, idx, r, bary.x, bary.y. bary.z)
