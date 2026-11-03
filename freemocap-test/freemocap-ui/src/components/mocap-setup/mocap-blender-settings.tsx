@@ -1,0 +1,297 @@
+import React, { useEffect, useRef } from "react";
+import SubactionHeader from "@/components/ui-components/SubactionHeader";
+import ToggleComponent from "@/components/ui-components/ToggleComponent";
+import ButtonSm from "@/components/ui-components/ButtonSm";
+import Checkbox from "@/components/ui-components/Checkbox";
+import NameDropdownSelector from "@/components/ui-components/NameDropdownSelector";
+import { useMocap } from "@/hooks/useMocap";
+import { useBlender } from "@/hooks/useBlender";
+import { useElectronIPC } from "@/services";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import {
+  blenderExportConfigUpdated,
+  selectMocapBlenderExportConfig,
+  BLENDER_MODEL_FORMATS,
+  ARMATURE_REST_POSES,
+  BlenderModelFormat,
+} from "@/store/slices/mocap";
+
+interface MOCAPBlenderSettingsProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+const MOCAPBlenderSettings: React.FC<MOCAPBlenderSettingsProps> = ({
+  open,
+  onClose,
+}) => {
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  const dispatch = useAppDispatch();
+  const blenderExportConfig = useAppSelector(selectMocapBlenderExportConfig);
+
+  const { mocapRecordingPath, detectorType } = useMocap();
+  const { api, isElectron } = useElectronIPC();
+  const {
+    effectiveBlenderExePath,
+    isUsingManualBlenderPath,
+    exportToBlenderEnabled,
+    autoOpenBlendFile,
+    isExporting,
+    isDetecting,
+    isOpening,
+    lastBlendFilePath,
+    redetectBlender,
+    setBlenderExePath,
+    setExportToBlenderEnabled,
+    setAutoOpenBlendFile,
+    triggerBlenderExport,
+    triggerOpenInBlender,
+  } = useBlender();
+
+  const handleSelectBlenderExe = async (): Promise<void> => {
+    if (!isElectron || !api) return;
+    try {
+      const result: string | null = await api.fileSystem.selectExecutableFile.mutate();
+      if (result) setBlenderExePath(result);
+    } catch (error) {
+      console.error("Failed to select Blender executable:", error);
+    }
+  };
+
+  const handleProcessWithBlender = (): void => {
+    if (!mocapRecordingPath) return;
+    void triggerBlenderExport(mocapRecordingPath);
+  };
+
+  const handleOpenInBlender = (): void => {
+    if (!mocapRecordingPath) return;
+    void triggerOpenInBlender(mocapRecordingPath);
+  };
+
+  const handleModelFormatToggle = (
+    format: BlenderModelFormat,
+    checked: boolean,
+  ): void => {
+    const formats = checked
+      ? [...blenderExportConfig.formats, format]
+      : blenderExportConfig.formats.filter((f) => f !== format);
+    dispatch(blenderExportConfigUpdated({ formats }));
+  };
+
+  const restPoseLabel =
+    ARMATURE_REST_POSES.find((p) => p.value === blenderExportConfig.rest_pose)
+      ?.label ?? ARMATURE_REST_POSES[0].label;
+
+  const handleRestPoseChange = (label: string): void => {
+    const restPose = ARMATURE_REST_POSES.find((p) => p.label === label);
+    if (restPose) {
+      dispatch(blenderExportConfigUpdated({ rest_pose: restPose.value }));
+    }
+  };
+
+  // The freemocap_blender_addon only understands MediaPipe output so far -
+  // an rtmpose recording's Blender export is turned off client-side to match.
+  const blenderSupported = detectorType === "mediapipe";
+
+  const canExport =
+    blenderSupported &&
+    !!mocapRecordingPath &&
+    !!effectiveBlenderExePath &&
+    !isExporting;
+
+  const canOpen =
+    !!mocapRecordingPath && !!effectiveBlenderExePath && !isOpening;
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={modalRef}
+      className="flex flex-col w-full br-2 reveal fadeIn gap-1"
+    >
+      <div className="gap-1 flex flex-col">
+        {/* Header */}
+        <div className="flex justify-content-space-between items-center">
+          <SubactionHeader text="Blender settings" />
+        </div>
+        <div className="flex flex-row justify-content-space-between items-center">
+          <div className="flex flex-row items-center">
+            <span className="icon icon-size-20 blender-icon"></span>
+            <p className="p-1 text-gray">Blender executable</p>
+          </div>
+          <ButtonSm
+            text={isDetecting ? "Detecting..." : "Autodetect"}
+            onClick={redetectBlender}
+            disabled={isDetecting}
+            tooltip={true}
+            tooltipPosition="pos-top-right"
+            tooltipText="Automatically find Blender installation on your system"
+          />
+        </div>
+
+        {/* Blender executable selector */}
+        <div className="flex p-1 flex-row gap-1 items-center justify-content-space-between">
+          <button
+            className="select-path button sm bg-middark br-1 border-1 border-black flex items-center gap-1 text-left flex-1"
+            onClick={handleSelectBlenderExe}
+            title="Click to select Blender executable"
+            disabled={!isElectron}
+            style={{ minWidth: 0, overflow: "hidden" }}
+          >
+            {effectiveBlenderExePath ? (
+              <p
+                className="recording-path-preview flex-1 text md"
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {effectiveBlenderExePath}
+              </p>
+            ) : (
+              <p
+                className="text-gray flex-1 text md"
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {isDetecting ? "Detecting…" : "Select Blender executable"}
+              </p>
+            )}
+          </button>
+        </div>
+        <p className="text sm text-gray p-1 mb-3">
+          {isUsingManualBlenderPath
+            ? "Using manually selected Blender"
+            : effectiveBlenderExePath
+              ? "Auto-detected Blender"
+              : "Click to browse for blender.exe"}
+        </p>
+
+        {!blenderSupported && (
+          <p className="text sm text-gray p-1">
+            Blender export only supports MediaPipe output right now - switch the detector
+            to MediaPipe to enable it.
+          </p>
+        )}
+
+        {/* Toggles */}
+        <ToggleComponent
+          text="Export to Blender after mocap processing"
+          isToggled={exportToBlenderEnabled && blenderSupported}
+          onToggle={setExportToBlenderEnabled}
+          disabled={!blenderSupported}
+        />
+
+        <ToggleComponent
+          text="Auto-open .blend file in Blender when done"
+          isToggled={autoOpenBlendFile && blenderSupported}
+          onToggle={setAutoOpenBlendFile}
+          disabled={!blenderSupported}
+        />
+
+        <SubactionHeader text="3D Model Export" />
+
+        <div className="flex p-1 flex-row gap-1 items-center">
+          <span className="text sm">Formats</span>
+          {BLENDER_MODEL_FORMATS.map((format) => (
+            <Checkbox
+              key={format.value}
+              label={format.label}
+              checked={blenderExportConfig.formats.includes(format.value)}
+              onChange={(e) =>
+                handleModelFormatToggle(format.value, e.target.checked)
+              }
+              disabled={!blenderSupported}
+            />
+          ))}
+        </div>
+
+        <SubactionHeader text="Armature" />
+
+        <div className="flex p-1 flex-row gap-1 items-center justify-content-space-between">
+          <span className="text sm">Rest Pose</span>
+          <NameDropdownSelector
+            options={ARMATURE_REST_POSES.map((pose) => pose.label)}
+            initialValue={restPoseLabel}
+            onChange={handleRestPoseChange}
+          />
+        </div>
+
+        <SubactionHeader text="Animation Cleanup (Experimental)" />
+
+        <ToggleComponent
+          text="Apply Foot Locking"
+          isToggled={blenderExportConfig.apply_foot_locking}
+          onToggle={(checked) =>
+            dispatch(blenderExportConfigUpdated({ apply_foot_locking: checked }))
+          }
+          disabled={!blenderSupported}
+        />
+
+        <ToggleComponent
+          text="Limit Hand Markers Range of Motion"
+          isToggled={blenderExportConfig.limit_hand_markers_range_of_motion}
+          onToggle={(checked) =>
+            dispatch(
+              blenderExportConfigUpdated({
+                limit_hand_markers_range_of_motion: checked,
+              }),
+            )
+          }
+          disabled={!blenderSupported}
+        />
+
+        <ButtonSm
+          text={isExporting ? "Exporting to Blender…" : "Process Recording with Blender"}
+          onClick={handleProcessWithBlender}
+          disabled={!canExport}
+          className="full-width quaternary mt-3"
+          tooltip={true}
+          tooltipPosition="pos-bottom-left"
+          tooltipText={
+            blenderSupported
+              ? "Send your motion capture recording to Blender for further processing"
+              : "Blender export only supports MediaPipe output right now"
+          }
+        />
+
+        <ButtonSm
+          text={isOpening ? "Opening…" : "Open .blend in Blender"}
+          onClick={handleOpenInBlender}
+          disabled={!canOpen}
+          className="full-width quaternary"
+          tooltip={true}
+          tooltipPosition="pos-bottom-left"
+          tooltipText="Launch Blender and open the .blend file"
+        />
+
+        {lastBlendFilePath && (
+          <p className="text sm text-gray p-1 mb-3">
+            Last export: {lastBlendFilePath}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default MOCAPBlenderSettings;

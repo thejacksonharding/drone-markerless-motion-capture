@@ -1,0 +1,163 @@
+import inspect
+import json
+import logging
+import subprocess
+from pathlib import Path
+from typing import List
+
+import freemocap_blender_addon
+
+from freemocap.core.blender.helpers import run_blender_export as run_blender_export_module
+from freemocap.core.blender.helpers.run_blender_export import run_blender_export
+from freemocap.core.blender.helpers.get_best_guess_of_blender_path import get_best_guess_of_blender_path
+from freemocap.system.recording_status.recording_status import (
+    raise_if_not_blender_ready,
+    detect_blender_input_detector,
+)
+from freemocap.utilities.open_file import open_file
+
+logger = logging.getLogger(__name__)
+
+RAW_3D_NPY_FILE_NAME = "3dData_numFrames_numTrackedPoints_spatialXYZ.npy"
+REPROJECTION_ERROR_NPY_FILE_NAME = "3dData_numFrames_numTrackedPoints_reprojectionError.npy"
+FULL_REPROJECTION_ERROR_NPY_FILE_NAME = "3dData_numCams_numFrames_numTrackedPoints_reprojectionError.npy"
+REPROJECTION_FILTERED_PREFIX = "reprojection_filtered_"
+
+DATA_3D_NPY_FILE_NAME = "skeleton_3d.npy"
+RIGID_BONES_NPY_FILE_NAME = "rigid_bones_3d.npy"
+BODY_3D_DATAFRAME_CSV_FILE_NAME = "body_3d_xyz.csv"
+RIGHT_HAND_3D_DATAFRAME_CSV_FILE_NAME = "right_hand_right_hand.csv" # TODO -  the names are duplicated in the right/left hand, needs fixed in skellyforge.skellymodels.human (i think?)
+LEFT_HAND_3D_DATAFRAME_CSV_FILE_NAME = "left_hand_left_hand.csv" # TODO -  the names are duplicated in the right/left hand, needs fixed in skellyforge.skellymodels.human (i think?)
+FACE_3D_DATAFRAME_CSV_FILE_NAME = "face_3d_xyz.csv"
+
+OLD_DATA_2D_NPY_FILE_NAME = "mediapipe2dData_numCams_numFrames_numTrackedPoints_pixelXY.npy"
+OLD_RAW_3D_NPY_FILE_NAME = "mediapipe3dData_numFrames_numTrackedPoints_spatialXYZ.npy"
+OLD_REPROJECTION_ERROR_NPY_FILE_NAME = "mediapipe3dData_numFrames_numTrackedPoints_reprojectionError.npy"
+OLD_DATA_3D_NPY_FILE_NAME = "mediaPipeSkel_3d_body_hands_face.npy"
+
+
+def run_subprocess(command_list: List[str]):
+    logger.debug(f"Running subprocess with command list: {command_list}")
+    process = subprocess.Popen(command_list, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return process
+
+
+def _addon_config_payload(blender_export_config: dict | None) -> dict:
+    """Map API-level option names into the freemocap_blender_addon's Config namespace.
+
+    The addon's Config groups its options into sections (export_3d_model, add_rig,
+    ...), which is an addon-side detail. This is the boundary that translates, so
+    the HTTP/CLI contract can stay flat. Only keys the caller actually supplied are
+    forwarded; anything omitted keeps the addon's own default.
+    """
+    config_in = blender_export_config or {}
+    payload: dict = {}
+
+    if "formats" in config_in:
+        payload["export_3d_model"] = {"formats": config_in["formats"]}
+    if "rest_pose" in config_in:
+        payload["add_rig"] = {"rest_pose": config_in["rest_pose"]}
+
+    # Several options can land in the same addon section, so collect them rather
+    # than assigning the section once per option.
+    motion_cleanup = {
+        key: config_in[key]
+        for key in ("apply_foot_locking", "limit_hand_markers_range_of_motion")
+        if key in config_in
+    }
+    if motion_cleanup:
+        payload["motion_cleanup"] = motion_cleanup
+
+    return payload
+
+
+def export_to_blender(
+        recording_folder_path: str|Path,
+        detector:str,
+        blend_file_path: str|Path|None=None,
+        blender_exe_path: str|Path|None=None,
+        open_file_on_completion:bool=True,
+        blender_export_config: dict|None=None,
+):
+    if detector != "mediapipe":
+        message = (
+            f"Blender export skipped: recording was processed with '{detector}', but the "
+            "freemocap_blender_addon only supports MediaPipe output so far. Re-process with "
+            "MediaPipe to export to Blender."
+        )
+        logger.warning(message)
+        raise ValueError(message)
+
+    raise_if_not_blender_ready(recording_folder_path, 
+                               detector = detector)
+
+    if blender_exe_path is None:
+        blender_exe_path:Path = Path(get_best_guess_of_blender_path())
+        if not blender_exe_path.is_file():
+            raise RuntimeError(f"Blender executable not found at: {blender_exe_path}")
+    if blend_file_path is None:
+        blend_file_path = Path(recording_folder_path)/f"{Path(recording_folder_path).stem}.blend"
+
+    # Resolve the site-packages directory containing freemocap_blender_addon
+    # so we can inject it into Blender's sys.path (no addon installation needed)
+    addon_package_path = Path(inspect.getfile(freemocap_blender_addon))
+    site_packages_path = str(addon_package_path.parent.parent)
+    logger.debug(f"Will inject site-packages path into Blender's sys.path: {site_packages_path}")
+
+    # Use the module's __file__ directly — inspect.getfile() on a @beartype-wrapped
+    # function returns repr() of the wrapper, not the source file path.
+    simple_run_script = run_blender_export_module.__file__
+
+    addon_config_payload = _addon_config_payload(blender_export_config)
+
+    command_list = [
+        str(blender_exe_path),
+        "--background",
+        "--python",
+        simple_run_script,
+        "--",
+        site_packages_path,
+        str(recording_folder_path),
+        str(blend_file_path),
+        json.dumps(addon_config_payload),
+    ]
+
+    logger.info(f"Starting `blender` sub-process with this command: \n {command_list}")
+
+    blender_process = run_subprocess(command_list=command_list)
+
+    stdout, _ = blender_process.communicate()
+    if stdout:
+        for line in stdout.decode().splitlines():
+            logging.debug(line)
+
+    if blender_process.returncode != 0:
+        logging.error(f"Blender subprocess exited with non-zero return code: {blender_process.returncode}")
+    if not Path(blend_file_path).is_file():
+        raise RuntimeError(f"Blender output file not found at: {blend_file_path}")
+    elif Path(blend_file_path).stat().st_size == 0:
+        raise RuntimeError(f"Blender file was created but is empty at: {blend_file_path}")
+
+    if open_file_on_completion:
+        logger.info(f"Opening {blend_file_path} with {blender_exe_path}")
+        open_file(str(blend_file_path),)
+
+
+    logger.debug("Done with blender add on")
+    blender_process.terminate()  # manually terminate the process
+
+
+
+
+if __name__ == "__main__":
+
+
+    recording_path_in = r"C:\Users\jonma\freemocap_data\recording_sessions\steen_pantsOn_gait"
+    blend_file_path_in = str(Path(recording_path_in) / (str(Path(recording_path_in).stem) + ".blend"))
+    blender_exe_path_in = get_best_guess_of_blender_path()
+
+    export_to_blender(
+        recording_folder_path=recording_path_in,
+        blend_file_path=blend_file_path_in,
+        blender_exe_path=blender_exe_path_in,
+    )
