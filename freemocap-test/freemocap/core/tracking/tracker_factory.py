@@ -16,6 +16,7 @@ import skellytracker.core.detectors.keypoint_detectors.charuco    # noqa: F401 (
 import skellytracker.core.detectors.keypoint_detectors.mediapipe  # noqa: F401 (registry)
 import skellytracker.core.detectors.keypoint_detectors.rtmpose    # noqa: F401 (registry)
 import skellytracker.core.detectors.object_detectors.yolox        # noqa: F401 (registry)
+import freemocap.core.tasks.calibration.charuco_board.upright_charuco_detector  # noqa: F401 (registry)
 
 from skellytracker.core import (
     DetectionStageConfig,
@@ -63,14 +64,19 @@ logger = logging.getLogger(__name__)
 _onnx_session_build_lock = threading.Lock()
 
 
-def build_charuco_tracker(board_def: CharucoBoardDefinition) -> tuple[Tracker, CpuSession]:
+def build_charuco_tracker(
+    board_def: CharucoBoardDefinition,
+    *,
+    tracker_config: TrackerConfig | None = None,
+) -> tuple[Tracker, CpuSession]:
     """Build a charuco board tracker backed by a CpuSession.
 
     Returns both the Tracker and the underlying CpuSession so the caller can
     call tracker.close() / session.close() when done.
+    An explicit tracker_config preserves optional board-detection settings.
     """
     session = CpuSession.create(CpuSessionConfig())
-    config = TrackerConfig(
+    config = tracker_config if tracker_config is not None else TrackerConfig(
         stages=[
             DetectionStageConfig(
                 name="charuco",

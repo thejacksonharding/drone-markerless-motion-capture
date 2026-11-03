@@ -8,6 +8,7 @@ from skellytracker.core.detectors.keypoint_detectors.charuco import (
 )
 
 from freemocap.core.tasks.calibration.pyceres_calibration.helpers.models import PyceresCalibrationSolverConfig
+from freemocap.core.tasks.calibration.charuco_board.upright_charuco_detector import UprightCharucoDetectorConfig
 from freemocap.core.tasks.triangulation.helpers.triangulation_config import TriangulationConfig
 
 
@@ -44,6 +45,15 @@ class PosthocCalibrationPipelineConfig(BaseModel):
         description="Align world frame to charuco board plane after calibration.",
     )
 
+    use_upright_checkerboard_fallback: bool | None = Field(
+        default=None,
+        alias="useUprightCheckerboardFallback",
+        description=(
+            "Use full-grid detection of an upright, front-facing 7x9 board when marker decoding fails. "
+            "When omitted, enable automatically for 7x9 boards; False disables the fallback."
+        ),
+    )
+
     triangulation_config: TriangulationConfig = Field(
         default_factory=TriangulationConfig,
         alias="triangulationConfig",
@@ -55,11 +65,17 @@ class PosthocCalibrationPipelineConfig(BaseModel):
 
     @property
     def detector_config(self) -> TrackerConfig:
+        use_fallback = self.use_upright_checkerboard_fallback
+        if use_fallback is None:
+            use_fallback = (self.charuco_board.squares_x, self.charuco_board.squares_y) == (7, 9)
+        detector_class = (
+            UprightCharucoDetectorConfig if use_fallback else CharucoDetectorConfig
+        )
         return TrackerConfig(
             stages=[
                 DetectionStageConfig(
                     name="charuco",
-                    keypoint_detectors=[CharucoDetectorConfig(board=self.charuco_board)],
+                    keypoint_detectors=[detector_class(board=self.charuco_board)],
                 )
             ]
         )

@@ -93,7 +93,7 @@ def _build_tracker(tracker_config: TrackerConfig) -> tuple[Tracker, object]:
 
     if _is_charuco_config(tracker_config):
         board_def = _extract_board_def(tracker_config)
-        return build_charuco_tracker(board_def)
+        return build_charuco_tracker(board_def, tracker_config=tracker_config)
 
     if _is_mediapipe_config(tracker_config):
         import skellytracker.core.detectors.keypoint_detectors.mediapipe  # noqa: F401 (registry)
@@ -554,6 +554,13 @@ def _load_cache_by_connection_frame(
         logger.debug(
             f"VideoNode [{camera_id}]: not a charuco config — realtime cache N/A"
         )
+        return None
+
+    # Realtime caches contain marker-only detections, so the fallback must redetect.
+    if any(
+        kp.detector_type == "charuco_upright_checkerboard"
+        for stage in detector_config.stages for kp in stage.keypoint_detectors
+    ):
         return None
 
     cache_path = recording_path / "output_data" / CACHE_FILENAME

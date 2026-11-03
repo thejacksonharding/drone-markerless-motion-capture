@@ -13,7 +13,9 @@ from skellyforge.post_processing.filters.filter_config import FilterConfig
 from skellyforge.post_processing.interpolation.apply_interpolation import interpolate_trajectory
 from skellyforge.post_processing.interpolation.interpolation_config import InterpolationConfig
 from skellyforge.skellymodels.managers.board import Board
-from skellyforge.skellymodels.models.tracking_model_info import CharucoBoard5x3ModelInfo, CharucoBoard7x5ModelInfo
+from skellyforge.skellymodels.models.tracking_model_info import (
+    AspectInfo, ModelInfo, CharucoBoard5x3ModelInfo, CharucoBoard7x5ModelInfo,
+)
 from skellytracker.core.detectors.keypoint_detectors.charuco import CharucoBoardDefinition
 
 from freemocap.core.tasks.calibration.shared.calibration_result import CalibrationResult
@@ -94,6 +96,24 @@ def charuco_model_from_observations(
     elif board_def.squares_x == 7 and board_def.squares_y == 5:
         model_info = CharucoBoard7x5ModelInfo()
         name = "charuco_board_7x5"
+    elif board_def.squares_x == 7 and board_def.squares_y == 9:
+        connections = {}
+        for row in range(8):
+            for col in range(6):
+                corner = row * 6 + col
+                neighbors = ([corner + 1] if col < 5 else []) + ([corner + 6] if row < 7 else [])
+                for neighbor in neighbors:
+                    connections[f"seg_{corner}_{neighbor}"] = {
+                        "proximal": str(corner), "distal": str(neighbor),
+                    }
+        model_info = ModelInfo(
+            name="charuco_board_7_9", tracker_name="CharucoTracker", order=["body"],
+            aspects={"body": AspectInfo(
+                tracked_points_names=[str(i) for i in range(48)], num_tracked_points=48,
+                segment_connections=connections,
+            )},
+        )
+        name = "charuco_board_7x9"
     else:
         raise ValueError(f"Unsupported board definition: x: {board_def.squares_x}, y: {board_def.squares_y}")
 
