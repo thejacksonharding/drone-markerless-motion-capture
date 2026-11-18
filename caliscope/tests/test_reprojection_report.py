@@ -1,0 +1,138 @@
+import matplotlib
+
+matplotlib.use("Agg")  # Force non-interactive backend
+
+import logging
+from pathlib import Path
+import tempfile
+import numpy as np
+
+from caliscope import __root__
+from caliscope.core.capture_volume import CaptureVolume
+from caliscope.core.point_data import ImagePoints, WorldPoints
+from caliscope.cameras.camera_array import CameraArray
+from caliscope.core.charuco import Charuco
+from caliscope.helper import copy_contents_to_clean_dest
+from caliscope.logger import setup_logging
+
+logger = logging.getLogger(__name__)
+
+
+def test_reprojection_report_generation(tmp_path: Path):
+    """Integration test: generate report from real post-optimization data."""
+    # Setup - copy test session to temp directory
+    session_name = "post_optimization"
+    original_session_path = Path(__root__, "tests", "sessions", session_name)
+    copy_contents_to_clean_dest(original_session_path, tmp_path)
+
+    # Load calibration data
+    camera_array = CameraArray.from_toml(tmp_path / "camera_array.toml")
+    Charuco.from_toml(tmp_path / "charuco.toml")
+
+    # Load from CSV format
+    csv_dir = tmp_path / "calibration" / "extrinsic" / "CHARUCO"
+    image_points = ImagePoints.from_csv(csv_dir / "xy_CHARUCO.csv")
+    world_points = image_points.triangulate(camera_array)
+
+    # Create CaptureVolume
+    capture_volume = CaptureVolume(
+        camera_array=camera_array,
+        image_points=image_points,
+        world_points=world_points,
+    )
+
+    # Generate reprojection report
+    report = capture_volume.reprojection_report
+
+    # === Validation Assertions ===
+
+    # Basic structure
+    assert report.n_observations_total > 0, "Must have observations"
+    assert report.n_observations_matched > 0, "Must have matched observations"
+    assert report.n_observations_matched <= report.n_observations_total
+
+    # Unmatched tracking
+    assert 0 <= report.unmatched_rate <= 1.0
+    assert isinstance(report.n_unmatched_observations, int)
+    assert len(report.unmatched_by_camera) == len(camera_array.cameras)
+
+    # RMSE values should be reasonable for calibrated system
+    assert 0.0 < report.overall_rmse < 10.0, f"RMSE {report.overall_rmse} out of expected range"
+
+    # Per-camera metrics
+    for cam_id in camera_array.posed_cameras.keys():
+        assert cam_id in report.by_camera, f"Missing RMSE for camera {cam_id}"
+        assert 0.0 <= report.by_camera[cam_id] < 10.0
+
+    # Per-point metrics
+    assert len(report.by_point) > 0, "Should have point-level metrics"
+    for (object_id, keypoint_id), rmse in report.by_point.items():
+        assert 0.0 <= rmse < 10.0
+
+    # Raw errors DataFrame structure
+    assert len(report.raw_errors) == report.n_observations_matched
+    expected_columns = ["sync_index", "cam_id", "object_id", "keypoint_id", "error_x", "error_y", "euclidean_error"]
+    assert list(report.raw_errors.columns) == expected_columns
+
+    # Verify error calculations are consistent
+    calculated_overall_rmse = float(np.sqrt(np.mean(report.raw_errors["euclidean_error"] ** 2)))
+    assert abs(report.overall_rmse - calculated_overall_rmse) < 1e-10
+
+    # Verify caching works (returns same object)
+    report2 = capture_volume.reprojection_report
+    assert report2 is report, "Caching failed - should return same object"
+
+    logger.info(
+        f"✓ Report generation successful: {report.n_observations_matched} matched, "
+        f"{report.n_unmatched_observations} unmatched, "
+        f"RMSE = {report.overall_rmse:.4f} pixels"
+    )
+
+
+def test_unmatched_observation_tracking(tmp_path: Path):
+    """Verify unmatched observations are correctly tracked."""
+    # Use same data as above
+    session_name = "post_optimization"
+    original_session_path = Path(__root__, "tests", "sessions", session_name)
+    copy_contents_to_clean_dest(original_session_path, tmp_path)
+
+    camera_array = CameraArray.from_toml(tmp_path / "camera_array.toml")
+    csv_dir = tmp_path / "calibration" / "extrinsic" / "CHARUCO"
+    image_points = ImagePoints.from_csv(csv_dir / "xy_CHARUCO.csv")
+    world_points = WorldPoints.from_csv(csv_dir / "xyz_CHARUCO.csv")
+
+    capture_volume = CaptureVolume(
+        camera_array=camera_array,
+        image_points=image_points,
+        world_points=world_points,
+    )
+
+    report = capture_volume.reprojection_report
+
+    # Verify unmatched counting logic
+    total_observations = len(capture_volume.image_points.df)
+    matched_observations = report.n_observations_matched
+
+    # Manual verification of unmatched by camera
+    for cam_id in camera_array.cameras.keys():
+        cam_total = (capture_volume.image_points.df["cam_id"] == cam_id).sum()
+        cam_matched = (
+            (capture_volume.image_points.df["cam_id"] == cam_id) & (capture_volume.img_to_obj_map >= 0)
+        ).sum()
+        expected_unmatched = cam_total - cam_matched
+
+        assert report.unmatched_by_camera[cam_id] == expected_unmatched, f"Unmatched count mismatch for camera {cam_id}"
+
+    assert report.n_unmatched_observations == total_observations - matched_observations
+    logger.info("✓ Unmatched observation tracking validated")
+
+
+if __name__ == "__main__":
+    setup_logging()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        print("Running reprojection report tests...")
+        test_reprojection_report_generation(tmp_path)
+        test_unmatched_observation_tracking(tmp_path)

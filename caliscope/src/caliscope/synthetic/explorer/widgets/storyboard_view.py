@@ -1,0 +1,259 @@
+"""Four-panel synchronized 3D visualization of calibration pipeline stages."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
+
+from caliscope.gui.view_models.playback_view_model import PlaybackViewModel
+from caliscope.gui.widgets.qt3d_playback_widget import Qt3DPlaybackWidget
+
+if TYPE_CHECKING:
+    from caliscope.synthetic.explorer.presenter import PipelineResult
+    from caliscope.synthetic.synthetic_scene import SyntheticScene
+
+logger = logging.getLogger(__name__)
+
+
+class StoryboardView(QWidget):
+    """Four-panel synchronized visualization of calibration pipeline stages.
+
+    Layout (stacked vertically for laptop screens):
+    +--------------------------------------+
+    |           GROUND TRUTH               |
+    +--------------------------------------+
+    |           BOOTSTRAPPED               |
+    +--------------------------------------+
+    |            OPTIMIZED                 |
+    +--------------------------------------+
+    |             ALIGNED                  |
+    +--------------------------------------+
+
+    All panels have synchronized camera rotation/pan/zoom.
+    Frame navigation is controlled externally via set_frame().
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+        self._panels: dict[str, Qt3DPlaybackWidget] = {}
+        self._view_models: dict[str, PlaybackViewModel | None] = {
+            "ground_truth": None,
+            "bootstrapped": None,
+            "optimized": None,
+            "aligned": None,
+        }
+        self._sync_in_progress = False
+        self._current_frame = 0
+
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QGridLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        panel_configs = [
+            ("ground_truth", "GROUND TRUTH", 0, 0),
+            ("bootstrapped", "BOOTSTRAPPED", 1, 0),
+            ("optimized", "OPTIMIZED", 2, 0),
+            ("aligned", "ALIGNED", 3, 0),
+        ]
+
+        for key, title, row, col in panel_configs:
+            panel = self._create_panel(key, title)
+            layout.addWidget(panel, row, col)
+
+        for r in range(4):
+            layout.setRowStretch(r, 1)
+        layout.setColumnStretch(0, 1)
+
+    def _create_panel(self, key: str, title: str) -> QWidget:
+        """Create a labeled panel placeholder."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+
+        label = QLabel(title)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("font-weight: bold; font-size: 12px; color: white;")
+        layout.addWidget(label)
+
+        # Placeholder - will be replaced when view model is set
+        placeholder = QLabel("No data")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet("background-color: #333; color: #666;")
+        placeholder.setMinimumSize(200, 150)
+        layout.addWidget(placeholder, stretch=1)
+
+        # Store reference to placeholder for later replacement
+        container.setProperty("placeholder", placeholder)
+        container.setProperty("layout_ref", layout)
+        container.setProperty("key", key)
+
+        return container
+
+    def set_scene(self, scene: SyntheticScene) -> None:
+        """Set ground truth from synthetic scene."""
+        vm = PlaybackViewModel(
+            camera_array=scene.camera_array,
+            world_points=scene.world_points,
+        )
+        self._set_panel_view_model("ground_truth", vm)
+
+        # Clear other panels when scene changes
+        for key in ["bootstrapped", "optimized", "aligned"]:
+            self._clear_panel(key)
+
+    def set_result(self, result: PipelineResult) -> None:
+        """Update panels with pipeline result."""
+        # Bootstrapped
+        if result.bootstrapped_cameras and result.bootstrapped_world_points:
+            vm = PlaybackViewModel(
+                camera_array=result.bootstrapped_cameras,
+                world_points=result.bootstrapped_world_points,
+            )
+            self._set_panel_view_model("bootstrapped", vm)
+
+        # Optimized
+        if result.optimized_cameras and result.optimized_world_points:
+            vm = PlaybackViewModel(
+                camera_array=result.optimized_cameras,
+                world_points=result.optimized_world_points,
+            )
+            self._set_panel_view_model("optimized", vm)
+
+        # Aligned
+        if result.aligned_cameras and result.aligned_world_points:
+            vm = PlaybackViewModel(
+                camera_array=result.aligned_cameras,
+                world_points=result.aligned_world_points,
+            )
+            self._set_panel_view_model("aligned", vm)
+
+    def set_frame(self, frame: int) -> None:
+        """Set current frame on all panels."""
+        self._current_frame = frame
+        for panel in self._panels.values():
+            panel.set_sync_index(frame)
+
+    def _set_panel_view_model(self, key: str, view_model: PlaybackViewModel) -> None:
+        """Replace panel content with a PlaybackTriangulationWidget."""
+        # Find the container widget
+        container = self._find_container(key)
+        if container is None:
+            logger.warning(f"Could not find container for key: {key}")
+            return
+
+        # Use layout_ref to avoid shadowing built-in 'layout'
+        panel_layout: QVBoxLayout | None = container.property("layout_ref")
+        placeholder: QLabel | None = container.property("placeholder")
+
+        if panel_layout is None:
+            logger.warning(f"No layout_ref property found for container: {key}")
+            return
+
+        # Remove existing panel if present
+        if key in self._panels:
+            old_panel = self._panels[key]
+            panel_layout.removeWidget(old_panel)
+            old_panel.deleteLater()
+            del self._panels[key]
+
+        # Remove placeholder if present
+        if placeholder is not None and placeholder.parent() is not None:
+            panel_layout.removeWidget(placeholder)
+            placeholder.hide()
+
+        # Create new panel
+        panel = Qt3DPlaybackWidget(view_model)
+        panel.show_playback_controls(False)
+        panel_layout.addWidget(panel, stretch=1)
+
+        self._panels[key] = panel
+        self._view_models[key] = view_model
+
+        # Connect camera sync
+        self._connect_camera_sync(panel)
+
+        # Set current frame
+        panel.set_sync_index(self._current_frame)
+
+    def _clear_panel(self, key: str) -> None:
+        """Clear a panel back to placeholder state."""
+        container = self._find_container(key)
+        if container is None:
+            return
+
+        panel_layout: QVBoxLayout | None = container.property("layout_ref")
+        placeholder: QLabel | None = container.property("placeholder")
+
+        if panel_layout is None:
+            return
+
+        # Remove existing panel
+        if key in self._panels:
+            old_panel = self._panels[key]
+            panel_layout.removeWidget(old_panel)
+            old_panel.deleteLater()
+            del self._panels[key]
+
+        # Show placeholder
+        if placeholder is not None:
+            panel_layout.addWidget(placeholder, stretch=1)
+            placeholder.show()
+
+        self._view_models[key] = None
+
+    def _find_container(self, key: str) -> QWidget | None:
+        """Find container widget by key."""
+        grid_layout = self.layout()
+        if grid_layout is None:
+            return None
+
+        for i in range(grid_layout.count()):
+            item = grid_layout.itemAt(i)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None and widget.property("key") == key:
+                    return widget
+        return None
+
+    def _connect_camera_sync(self, panel: Qt3DPlaybackWidget) -> None:
+        """Connect camera synchronization between panels.
+
+        TODO: Implement Qt3D camera sync. Needs event filter on each panel's
+        Qt3DWindow to detect orbit/pan/zoom end, then copy TerrainCameraController
+        state to other panels.
+        """
+        pass
+
+    def _sync_camera_from(self, source: Qt3DPlaybackWidget) -> None:
+        """Copy camera state from source to all other panels.
+
+        TODO: Implement Qt3D camera sync via TerrainCameraController state.
+        """
+        pass
+
+    def cleanup(self) -> None:
+        """Explicit cleanup - MUST be called before destruction."""
+        for key in list(self._panels.keys()):
+            panel = self._panels.pop(key)
+            panel.stop_playback()
+            panel.deleteLater()
+
+        self._view_models = {k: None for k in self._view_models}
+
+    def closeEvent(self, event) -> None:
+        """Handle close event - defensive cleanup."""
+        self.cleanup()
+        super().closeEvent(event)

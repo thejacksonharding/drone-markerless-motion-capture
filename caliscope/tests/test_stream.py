@@ -1,0 +1,59 @@
+import logging
+from pathlib import Path
+from queue import Queue
+from time import sleep
+
+from caliscope import __root__
+from caliscope.core.charuco import Charuco
+from caliscope.recording.frame_packet_streamer import create_streamer
+from caliscope.trackers.charuco_tracker import CharucoTracker
+
+logger = logging.getLogger(__name__)
+
+
+def test_streamer():
+    recording_directory = Path(__root__, "tests", "sessions", "post_monocal", "calibration", "extrinsic")
+
+    charuco = Charuco(4, 5, 11, 8.5, aruco_scale=0.75, square_size_override_cm=5.25, inverted=True)
+
+    charuco_tracker = CharucoTracker(charuco)
+
+    streamer = create_streamer(
+        video_directory=recording_directory,
+        cam_id=1,
+        tracker=charuco_tracker,
+        fps_target=6,
+    )
+    frame_q = Queue()
+    streamer.subscribe(frame_q)
+    streamer.start()
+    streamer.pause()
+
+    sleep(1)
+    logger.info(f"Publisher frame index is {streamer.frame_index}")
+    sleep(1)
+    logger.info(f"Publisher frame index is {streamer.frame_index}")
+
+    streamer.unpause()
+
+    while True:
+        tracked_frame = frame_q.get()
+
+        if tracked_frame.frame is None:
+            break
+
+        if streamer.frame_index == 10:
+            logger.info("Testing pause/unpause functionality")
+            streamer.pause()
+            sleep(0.5)
+            test_index = streamer.frame_index
+            sleep(0.5)
+            # make sure that streamer doesn't advance with pause
+            assert test_index == streamer.frame_index
+            streamer.unpause()
+
+    streamer.close()
+
+
+if __name__ == "__main__":
+    test_streamer()

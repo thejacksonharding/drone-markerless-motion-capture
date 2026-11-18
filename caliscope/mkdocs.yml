@@ -1,0 +1,74 @@
+site_name: Caliscope
+site_description: Multicamera calibration and 3D motion capture for researchers
+site_url: https://mprib.github.io/caliscope/
+repo_url: https://github.com/mprib/caliscope
+repo_name: caliscope
+
+# A renamed heading silently breaks every link pointing at its old anchor.
+# Raised to warn so `mkdocs build --strict` fails the build instead.
+validation:
+  anchors: warn
+
+theme:
+  logo: images/box3d-center.svg
+  favicon: images/box3d-center.svg
+  name: material
+  font:
+    text: "Roboto"
+    code: "Roboto Mono"
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to dark mode
+      primary: blue
+      accent: green
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to light mode
+      primary: blue
+      accent: green
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting Started:
+      - Project Setup: project_setup.md
+      - Sample Project: sample_project.md
+  - Calibration:
+      - Calibration Targets: calibration_targets.md
+      - Intrinsic Calibration: intrinsic_calibration.md
+      - Extrinsic Calibration: extrinsic_calibration.md
+      - Markerless Calibration (Experimental): markerless_calibration.md
+      - Extrinsic Reference: extrinsic_calibration_reference.md
+      - ArUco Calibration Set: aruco_calibration_set.md
+  - Reconstruction:
+      - Tracking & Triangulation: reconstruction.md
+      - Custom ONNX Trackers: onnx_trackers.md
+  - Scripting API: scripting.md
+
+plugins:
+  - search
+  - git-revision-date-localized
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.caret
+  - pymdownx.smartsymbols
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+copyright: |
+  &copy; 2026 <a href="https://github.com/mprib"  target="_blank" rel="noopener">Mac Prible</a>

@@ -1,0 +1,210 @@
+"""Thumbnail display with rotation control for a single camera.
+
+Displays a camera's thumbnail image with a rotation button. Emits signals
+for rotation requests — does not interact with presenter directly.
+"""
+
+from typing import TYPE_CHECKING
+
+import cv2
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+from numpy.typing import NDArray
+
+from caliscope.gui import ICONS_DIR
+from caliscope.gui.utils.frame_display import cv2_to_qlabel
+from caliscope.trackers.helper import apply_rotation
+
+if TYPE_CHECKING:
+    from caliscope.packets import PointPacket
+
+# Rotation button style with blue-grey tint for visibility.
+# Uses 'color' property to set icon color via SVG currentColor inheritance.
+ROTATION_BUTTON_STYLE = """
+    QToolButton {
+        background-color: #3a4a5a;
+        border: 1px solid #4a5a6a;
+        border-radius: 4px;
+        padding: 4px;
+        color: #aabbcc;
+    }
+    QToolButton:hover {
+        background-color: #4a5a6a;
+        border-color: #5a6a7a;
+    }
+    QToolButton:pressed {
+        background-color: #2a3a4a;
+    }
+    QToolButton:disabled {
+        background-color: #333;
+        border-color: #444;
+        color: #555;
+    }
+"""
+
+
+class CameraThumbnailCard(QFrame):
+    """Card displaying camera thumbnail with rotation controls.
+
+    Signals:
+        rotate_requested: Emitted when user clicks rotate.
+            Payload is (cam_id, direction) where direction is +1 (CW) or -1 (CCW).
+    """
+
+    rotate_requested = Signal(int, int)  # (cam_id, direction)
+
+    THUMBNAIL_SIZE = 280  # pixels (larger for better visibility)
+    ICON_SIZE = 20  # pixels for rotation button icons
+    BUTTON_SIZE = 32  # pixels for rotation button clickable area
+
+    def __init__(self, cam_id: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(f"cameraCard{cam_id}")
+        self._cam_id = cam_id
+        self._rotation_count = 0
+
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        """Build the card layout."""
+        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
+        # Prevent vertical stretching - card should be as compact as possible
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        layout = QVBoxLayout(self)
+
+        # Camera ID label
+        self._cam_id_label = QLabel(f"Cam {self._cam_id}")
+        self._cam_id_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._cam_id_label)
+
+        # Thumbnail display
+        self._thumbnail_label = QLabel()
+        self._thumbnail_label.setObjectName("thumbnailLabel")
+        self._thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumbnail_label.setMinimumSize(self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE)
+        self._thumbnail_label.setStyleSheet("background-color: #1a1a1a; color: #888;")
+        layout.addWidget(self._thumbnail_label)
+
+        # Compact rotation controls with icons
+        rotation_row = QHBoxLayout()
+        rotation_row.setContentsMargins(0, 8, 0, 0)
+        rotation_row.addStretch()
+
+        self._rotate_left_btn = QToolButton()
+        self._rotate_left_btn.setIcon(QIcon(str(ICONS_DIR / "rotate-camera-left.svg")))
+        self._rotate_left_btn.setIconSize(
+            self._rotate_left_btn.iconSize().scaled(self.ICON_SIZE, self.ICON_SIZE, Qt.AspectRatioMode.KeepAspectRatio)
+        )
+        self._rotate_left_btn.setToolTip("Rotate counter-clockwise")
+        self._rotate_left_btn.setFixedSize(self.BUTTON_SIZE, self.BUTTON_SIZE)
+        self._rotate_left_btn.setStyleSheet(ROTATION_BUTTON_STYLE)
+        self._rotate_left_btn.clicked.connect(lambda: self._on_rotate_clicked(-1))
+        rotation_row.addWidget(self._rotate_left_btn)
+
+        rotation_row.addSpacing(8)  # Gap between buttons
+
+        self._rotate_right_btn = QToolButton()
+        self._rotate_right_btn.setIcon(QIcon(str(ICONS_DIR / "rotate-camera-right.svg")))
+        self._rotate_right_btn.setIconSize(
+            self._rotate_right_btn.iconSize().scaled(self.ICON_SIZE, self.ICON_SIZE, Qt.AspectRatioMode.KeepAspectRatio)
+        )
+        self._rotate_right_btn.setToolTip("Rotate clockwise")
+        self._rotate_right_btn.setFixedSize(self.BUTTON_SIZE, self.BUTTON_SIZE)
+        self._rotate_right_btn.setStyleSheet(ROTATION_BUTTON_STYLE)
+        self._rotate_right_btn.clicked.connect(lambda: self._on_rotate_clicked(+1))
+        rotation_row.addWidget(self._rotate_right_btn)
+
+        rotation_row.addStretch()
+        layout.addLayout(rotation_row)
+
+    @property
+    def cam_id(self) -> int:
+        """Camera cam_id for this card."""
+        return self._cam_id
+
+    # Landmark overlay styling
+    LANDMARK_COLOR = (0, 0, 255)  # Red (BGR for OpenCV)
+    LANDMARK_SCALE = 0.012  # Radius as fraction of frame's smaller dimension
+
+    def set_thumbnail(
+        self,
+        frame: NDArray,
+        rotation_count: int = 0,
+        points: "PointPacket | None" = None,
+    ) -> None:
+        """Update the displayed thumbnail.
+
+        Args:
+            frame: BGR image from camera
+            rotation_count: Current rotation (0-3) to apply for display
+            points: Optional tracked landmarks to overlay as red dots
+        """
+        self._rotation_count = rotation_count
+
+        # Draw landmark overlay BEFORE rotation - points are in original frame coordinates
+        if points is not None:
+            frame = self._draw_landmarks(frame, points)
+
+        # Apply rotation for display (after drawing, so dots rotate with the image)
+        rotated = apply_rotation(frame, rotation_count)
+
+        # Convert to QPixmap and scale
+        image = cv2_to_qlabel(rotated)
+        pixmap = QPixmap.fromImage(image)
+        pixmap = pixmap.scaled(
+            self.THUMBNAIL_SIZE,
+            self.THUMBNAIL_SIZE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+        )
+        self._thumbnail_label.setPixmap(pixmap)
+
+    def set_missing_video(self) -> None:
+        """Show that the camera's video file is absent instead of a stale frame."""
+        self._thumbnail_label.clear()
+        self._thumbnail_label.setText(f"No video file for cam_{self._cam_id}")
+
+    def _draw_landmarks(self, frame: NDArray, points: "PointPacket") -> NDArray:
+        """Draw tracked landmarks as red dots on frame.
+
+        Points from trackers are in original (unrotated) image coordinates.
+        This method must be called BEFORE apply_rotation() so that the dots
+        rotate together with the image content.
+
+        Radius scales with frame size so dots remain visible after thumbnail scaling.
+        """
+        if len(points.keypoint_id) == 0:
+            return frame
+
+        # Scale radius with frame size (use smaller dimension for consistency)
+        h, w = frame.shape[:2]
+        radius = max(3, int(min(h, w) * self.LANDMARK_SCALE))
+
+        result = frame.copy()
+        if result.ndim == 2:
+            result = cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+        for x, y in points.img_loc:
+            cv2.circle(result, (int(x), int(y)), radius, self.LANDMARK_COLOR, -1)
+
+        return result
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable the rotation buttons."""
+        self._rotate_left_btn.setEnabled(enabled)
+        self._rotate_right_btn.setEnabled(enabled)
+
+    def _on_rotate_clicked(self, direction: int) -> None:
+        """Handle rotate button click.
+
+        Args:
+            direction: +1 for clockwise, -1 for counter-clockwise
+        """
+        self.rotate_requested.emit(self._cam_id, direction)

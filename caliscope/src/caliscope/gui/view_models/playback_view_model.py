@@ -1,0 +1,212 @@
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
+
+from caliscope.cameras.camera_array import CameraArray
+from caliscope.core.point_data import STATIC_SYNC_INDEX, WorldPoints
+from caliscope.gui.geometry.camera_frustum import build_camera_geometry
+from caliscope.gui.geometry.wireframe import WireframeSegment
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FrameGeometry:
+    """Holds the raw buffers for a single frame, ready for the GPU."""
+
+    points: NDArray[np.float32]  # (N, 3) float32, includes NaNs for missing points
+
+
+class PlaybackViewModel:
+    def __init__(
+        self,
+        camera_array: CameraArray,
+        world_points: WorldPoints | None = None,
+        wireframe_segments: list[WireframeSegment] | None = None,
+        fps: int = 30,
+    ):
+        self.world_points = world_points
+        self.camera_array = camera_array
+        self.wireframe_segments = wireframe_segments or []
+        self.frame_rate = fps
+
+        # Handle camera-only mode (no points)
+        if world_points is None:
+            self.all_point_keys: list[tuple[int, int]] = []
+            self.n_points = 0
+            self.id_to_index: dict[tuple[int, int], int] = {}
+            self._static_lines = np.empty((0, 2), dtype=np.int32)
+            self._grouped_points: dict[Any, Any] = {}
+            logger.info("PlaybackViewModel initialized in camera-only mode (no points).")
+            return
+
+        # 1. Establish the Canonical Map (The "Superset" of all points)
+        # Build unique (object_id, keypoint_id) pairs across the full recording
+        df = world_points.df
+        unique_keys = df[["object_id", "keypoint_id"]].drop_duplicates().sort_values(["object_id", "keypoint_id"])
+        self.all_point_keys = list(zip(unique_keys["object_id"], unique_keys["keypoint_id"]))
+        self.n_points = len(self.all_point_keys)
+
+        # Map: (object_id, keypoint_id) -> Buffer Index (0 to N-1)
+        self.id_to_index = {key: i for i, key in enumerate(self.all_point_keys)}
+
+        logger.info(f"PlaybackViewModel initialized with {self.n_points} unique points.")
+
+        # 2. Pre-compute Static Wireframe Topology
+        # This converts point IDs to buffer indices.
+        # Result is (n_lines, 2) array: [index_A, index_B] per row.
+        self._static_lines = self._build_static_topology()
+
+        # 3. Pre-group data for fast lookup during playback
+        # We group by sync_index so we don't have to filter the huge dataframe every frame.
+        self._grouped_points = {idx: grp for idx, grp in world_points.df.groupby("sync_index")}
+
+    @classmethod
+    def from_xyz_csv(
+        cls,
+        xyz_path: str | Path,
+        camera_array: CameraArray,
+        wireframe_segments: list[WireframeSegment] | None = None,
+        fps: int = 30,
+    ) -> "PlaybackViewModel":
+        """Create PlaybackViewModel from an xyz CSV file.
+
+        Convenience factory for post-processing visualization where xyz data
+        is loaded from disk rather than live triangulation.
+        """
+        world_points = WorldPoints.from_csv(xyz_path)
+        return cls(
+            camera_array=camera_array,
+            world_points=world_points,
+            wireframe_segments=wireframe_segments,
+            fps=fps,
+        )
+
+    @classmethod
+    def from_camera_array_only(cls, camera_array: CameraArray) -> "PlaybackViewModel":
+        """Create a ViewModel with cameras only (no points).
+
+        Used for preview mode before reconstruction — shows camera frustums
+        without any tracked points.
+        """
+        return cls(camera_array=camera_array)
+
+    @property
+    def has_points(self) -> bool:
+        """True if this contains point data, False if camera-only preview."""
+        return self.world_points is not None
+
+    @property
+    def min_index(self) -> int:
+        if self.world_points is None or self.world_points.min_index is None:
+            return 0
+        return self.world_points.min_index
+
+    @property
+    def max_index(self) -> int:
+        if self.world_points is None or self.world_points.max_index is None:
+            return 0  # Single frame for camera-only mode
+        return self.world_points.max_index
+
+    @property
+    def valid_sync_indices(self) -> np.ndarray:
+        """Return sorted array of sync indices that have point data.
+
+        Used for slider navigation - the slider should only stop at frames
+        that actually have data, not every frame in the min/max range.
+        For sparse data (e.g., every 5th frame), this returns [0, 5, 10, ...]
+        """
+        if not self._grouped_points:
+            return np.array([], dtype=np.int64)
+        keys = [k for k in self._grouped_points if k != STATIC_SYNC_INDEX]
+        return np.sort(np.array(keys, dtype=np.int64))
+
+    def get_camera_geometry(self, scale: float = 0.0005) -> dict[str, Any] | None:
+        """Pass-through to the static camera builder."""
+        return build_camera_geometry(self.camera_array, scale=scale)
+
+    def get_camera_positions(self) -> NDArray[np.float64] | None:
+        """Get world positions of all cameras.
+
+        Returns (n_cameras, 3) array of camera centers in world coordinates,
+        or None if no cameras have extrinsics.
+
+        Used by visualization to compute appropriate camera/view positioning.
+        """
+        positions = []
+        for camera in self.camera_array.cameras.values():
+            if camera.rotation is None or camera.translation is None:
+                continue
+            # Camera center in world: C = -R^T @ t
+            center = -camera.rotation.T @ camera.translation
+            positions.append(center)
+
+        if not positions:
+            return None
+
+        return np.array(positions, dtype=np.float64)
+
+    def get_static_wireframe_data(self) -> NDArray[np.int32]:
+        """Return the wireframe as an (L, 2) int32 array of point buffer index pairs."""
+        return self._static_lines
+
+    def get_frame_geometry(self, sync_index: int) -> FrameGeometry:
+        """
+        Returns the point coordinates for a specific frame.
+
+        Crucially, this returns a FIXED SIZE array (N, 3).
+        Points missing in this frame are filled with NaN.
+        """
+        # Initialize with NaN (invisible — Qt3D moves these off-screen)
+        # Shape is (N, 3)
+        points_buffer = np.full((self.n_points, 3), np.nan, dtype=np.float32)
+
+        if sync_index in self._grouped_points:
+            frame_df = self._grouped_points[sync_index]
+
+            coords = frame_df[["x_coord", "y_coord", "z_coord"]].values.astype(np.float32)
+
+            # Map each row's (object_id, keypoint_id) to its canonical buffer index
+            indices = []
+            valid_rows = []
+            for i, (oid, kid) in enumerate(zip(frame_df["object_id"].values, frame_df["keypoint_id"].values)):
+                key = (int(oid), int(kid))
+                if key in self.id_to_index:
+                    indices.append(self.id_to_index[key])
+                    valid_rows.append(i)
+
+            if indices:
+                points_buffer[indices] = coords[valid_rows]
+
+        # Static points (rigid objects) are present at every frame
+        if STATIC_SYNC_INDEX in self._grouped_points and sync_index != STATIC_SYNC_INDEX:
+            static_df = self._grouped_points[STATIC_SYNC_INDEX]
+            static_coords = static_df[["x_coord", "y_coord", "z_coord"]].values.astype(np.float32)
+            for i, (oid, kid) in enumerate(zip(static_df["object_id"].values, static_df["keypoint_id"].values)):
+                key = (int(oid), int(kid))
+                if key in self.id_to_index:
+                    points_buffer[self.id_to_index[key]] = static_coords[i]
+
+        return FrameGeometry(points=points_buffer)
+
+    def _build_static_topology(self) -> NDArray[np.int32]:
+        """
+        Converts the logical wireframe (Point A -> Point B) into
+        buffer indices (Index 5 -> Index 12).
+        """
+        lines = []
+
+        for segment in self.wireframe_segments:
+            # Wireframe segments use keypoint IDs within object 0
+            key_a = (0, segment.point_a_id)
+            key_b = (0, segment.point_b_id)
+            if key_a in self.id_to_index and key_b in self.id_to_index:
+                lines.append([self.id_to_index[key_a], self.id_to_index[key_b]])
+
+        if not lines:
+            return np.empty((0, 2), dtype=np.int32)
+        return np.array(lines, dtype=np.int32)
